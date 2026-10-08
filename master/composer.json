@@ -1,0 +1,13 @@
+{
+    "name": "replicated-log/master",
+    "type": "project",
+    "require": {
+        "php": ">=8.2",
+        "ext-swoole": "*"
+    },
+    "autoload": {
+        "psr-4": {
+            "Master\\": "src/"
+        }
+    }
+}

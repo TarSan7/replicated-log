@@ -1,0 +1,7 @@
+# Runs the test suite in its own container, separate from the app stack:
+#   docker compose -f docker-compose.test.yml run --rm --build tests
+services:
+  tests:
+    build:
+      context: .
+      dockerfile: tests/Dockerfile
