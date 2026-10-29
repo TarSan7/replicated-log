@@ -27,21 +27,29 @@ final class MessageController
     public function store(Request $request): JsonResponse
     {
         $body = Json::body($request);
+        $writeConcern = $body['w'] ?? null;
+
         if (!is_string($body['message'] ?? null)) {
             return new JsonResponse(['error' => 'message is required'], 400);
         }
 
+        if (!is_int($writeConcern) || $writeConcern < 1 || $writeConcern > $this->replicator->countSecondaries() + 1) {
+            return new JsonResponse(['error' => 'w must be an integer between 1 and ' . ($this->replicator->countSecondaries() + 1)], 400);
+        }
+        $requiredAcks = $writeConcern - 1;
         $entry = ['id' => $this->log->nextId(), 'message' => $body['message']];
         $this->log->append($entry);
         $this->logger->info('message appended', $entry);
 
-        $failed = $this->replicator->replicate($entry);
-        if ($failed) {
-            $this->logger->warning('replication failed', ['id' => $entry['id'], 'hosts' => $failed]);
-            return new JsonResponse(['error' => 'replication failed', 'hosts' => $failed], 500);
-        }
+        $acks = $this->replicator->replicate($entry, $writeConcern);
 
-        $this->logger->info('message replicated to all secondaries', ['id' => $entry['id']]);
+        if ($acks < $requiredAcks) {
+            $this->logger->warning('replication failed, write concern not satisfied', ['id' => $entry['id'], 'acks' => $acks, 'required' => $requiredAcks]);
+
+            return new JsonResponse(['error' => 'replication failed, write concern not satisfied', 'acks' => $acks, 'required' => $requiredAcks], 500);
+        }
+        $this->logger->info('message saved', ['id' => $entry['id'], 'w' => $writeConcern]);
+
         return new JsonResponse($entry, 201);
     }
 }

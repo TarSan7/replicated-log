@@ -19,9 +19,9 @@ final class MasterNode
         $this->messages = new MessageController(new MessageLog(), $transport, $logger);
     }
 
-    public function appendMessage(string $message): JsonResponse
+    public function appendMessage(string $message, int $w): JsonResponse
     {
-        return $this->messages->store(FakeRequest::json('POST', '/messages', ['message' => $message]));
+        return $this->messages->store(FakeRequest::json('POST', '/messages', ['message' => $message, 'w' => $w]));
     }
 
     public function listMessages(): array

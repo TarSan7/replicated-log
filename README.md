@@ -79,5 +79,10 @@ transport in place of HTTP, so network delays can be set per secondary:
 
 ```php
 $transport->setDelay($master, $secondary1, 2.0);
-$master->appendMessage('m1'); // blocks ~2s
+$master->appendMessage('m1', 3);              // w=3: blocks ~2s until secondary1 acks
+
+$transport->reorderMessages($master, $secondary1, 2);
+$master->appendMessage('m2', 1);              // held
+$master->appendMessage('m3', 1);              // delivered as m3, m2
+$secondary1->listMessages();                  // ['m1', 'm2', 'm3']
 ```

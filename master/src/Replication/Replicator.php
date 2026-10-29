@@ -6,7 +6,7 @@ namespace Master\Replication;
 use Master\Logger;
 use Swoole\Coroutine;
 use Swoole\Coroutine\Http\Client;
-use Swoole\Coroutine\WaitGroup;
+use Swoole\Coroutine\Channel;
 
 class Replicator
 {
@@ -21,28 +21,41 @@ class Replicator
     /**
      * Sends the entry to all secondaries in parallel.
      *
-     * @return list<string> hosts that failed to ACK
+     * @return int number of ACK
      */
-    public function replicate(array $entry): array
+    public function replicate(array $entry, int $w): int
     {
-        $wg     = new WaitGroup();
-        $failed = [];
+        $acks = 0;
+        $tries = 0;
+        $results = new Channel(count($this->secondaries()));
 
         foreach ($this->secondaries() as $host) {
-            $wg->add();
-            Coroutine::create(function () use ($host, $entry, $wg, &$failed): void {
+            Coroutine::create(function () use ($host, $entry, $results): void {
                 try {
-                    if (!$this->send($host, $entry)) {
-                        $failed[] = $host;
-                    }
-                } finally {
-                    $wg->done();
+                    $ok = $this->send($host, $entry);
+                } catch (\Throwable $e) {
+                    $ok = false;
+                    $this->logger->error('replication to the secondary failed unexpectedly', ['host' => $host, 'exception' => $e->getMessage()]);
                 }
+                $results->push(['host' => $host, 'ok' => $ok]);
             });
         }
-        $wg->wait();
 
-        return $failed;
+        while ($acks < $w - 1 && $tries < count($this->secondaries())) {
+            $result = $results->pop();
+
+            if ($result['ok']) {
+                $acks++;
+            }
+            $tries++;
+        }
+
+        return $acks;
+    }
+
+    public function countSecondaries(): int
+    {
+        return count($this->secondaries());
     }
 
     /** @return list<string> */

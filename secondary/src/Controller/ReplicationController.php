@@ -22,16 +22,27 @@ final class ReplicationController
     public function replicate(Request $request): JsonResponse
     {
         $entry = Json::body($request);
-        $this->logger->info('replication received', ['id' => $entry['id'] ?? null]);
+
+        if (!$this->isValid($entry)) {
+            return new JsonResponse(['error' => 'id must be a positive int and message must be a string'], 400);
+        }
+        $this->logger->info('replication received', ['id' => $entry['id']]);
 
         if ($this->delayMs > 0) {
-            $this->logger->info('delaying ack', ['id' => $entry['id'] ?? null, 'ms' => $this->delayMs]);
+            $this->logger->info('delaying ack', ['id' => $entry['id'], 'ms' => $this->delayMs]);
             Coroutine::sleep($this->delayMs / 1000);
         }
+        $result = $this->log->append($entry);
+        $this->logger->info("message {$result['status']}", ['id' => $entry['id']] + $result);
 
-        $this->log->append($entry);
-        $this->logger->info('message stored', $entry);
+        return new JsonResponse(['ack' => true] + $result);
+    }
 
-        return new JsonResponse(['ack' => true]);
+    private function isValid(mixed $entry): bool
+    {
+        return is_array($entry)
+            && is_int($entry['id'] ?? null)
+            && is_string($entry['message'] ?? null)
+            && $entry['id'] > 0;
     }
 }
