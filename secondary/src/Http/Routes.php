@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace Secondary\Http;
 
 use Secondary\Config;
+use Secondary\Controller\HealthController;
 use Secondary\Controller\MessageController;
 use Secondary\Controller\ReplicationController;
 use Secondary\Logger;
@@ -13,12 +14,14 @@ final class Routes
 {
     private readonly MessageController $messages;
     private readonly ReplicationController $replication;
+    private readonly HealthController $health;
 
     public function __construct(Config $config, private readonly Logger $logger)
     {
-        $log               = new MessageLog();
-        $this->messages    = new MessageController($log);
+        $log = new MessageLog();
+        $this->messages = new MessageController($log);
         $this->replication = new ReplicationController($log, $logger, $config->delayMs);
+        $this->health = new HealthController();
     }
 
     /** Endpoints for clients, served on PORT. */
@@ -32,6 +35,7 @@ final class Routes
     public function internal(): Router
     {
         return (new Router($this->logger))
-            ->post('/replicate', $this->replication->replicate(...));
+            ->post('/replicate', $this->replication->replicate(...))
+            ->get('/health', $this->health->check(...));
     }
 }

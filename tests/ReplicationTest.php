@@ -119,6 +119,55 @@ final class ReplicationTest extends TestCase
         });
     }
 
+    public function testRetryAndDeduplication(): void
+    {
+        $this->inCoroutine(function (): void {
+            [$transport, $master, $secondary1, $secondary2] = $this->cluster(timeout: 0.5, retryBaseDelay: 0.1, retryMaxDelay: 0.5);
+
+            $transport->dropMessage($master, $secondary1);
+            $this->assertRespondsQuickly(fn () => $master->appendMessage('m1', 1));
+            Coroutine::sleep(2);
+            $this->assertGreaterThan(2, $transport->attempts($secondary1, 1), 'm1 was not retried');
+            $this->assertSame([], $secondary1->listMessages());
+
+            $transport->removeDrop($master, $secondary1);
+            $this->waitUntil(fn () => $secondary1->listMessages() === ['m1'], timeout: 1);
+
+            $transport->setDelay($master, $secondary2, 3);
+            $this->assertRespondsQuickly(fn () => $master->appendMessage('m2', 1));
+            Coroutine::sleep(3);
+            $transport->removeDelay($master, $secondary2);
+
+            $this->waitUntil(fn () => $secondary2->listMessages() === ['m1', 'm2'], timeout: 1);
+            Coroutine::sleep(3);
+            $this->assertGreaterThan(1, count(array_keys($transport->deliveredTo($secondary2), 2)), 'm2 reached S2 only once');
+            $this->assertSame(['m1', 'm2'], $secondary2->listMessages(), 'm2 should be stored once');
+        });
+    }
+
+    public function testRetriedMessageKeepsTotalOrder(): void
+    {
+        $this->inCoroutine(function (): void {
+            [$transport, $master, $secondary1] = $this->cluster(retryBaseDelay: 2, retryMaxDelay: 2);
+
+            $master->appendMessage('m1', 1);
+            $master->appendMessage('m2', 1);
+
+            $transport->dropMessage($master, $secondary1);
+            $master->appendMessage('m3', 1);
+            $transport->removeDrop($master, $secondary1);
+            $master->appendMessage('m4', 1);
+
+            $this->waitUntil(fn () => in_array(4, $transport->deliveredTo($secondary1), true));
+            $this->assertSame([1, 2, 4], $transport->deliveredTo($secondary1));
+            $this->assertSame(['m1', 'm2'], $secondary1->listMessages(), 'm4 shown before m3');
+
+            $this->waitUntil(fn () => count($secondary1->listMessages()) === 4, timeout: 3);
+            $this->assertSame(['m1', 'm2', 'm3', 'm4'], $secondary1->listMessages());
+            $this->assertSame(2, $transport->attempts($secondary1, 3));
+        });
+    }
+
     public function testDuplicateMessageIsStoredOnce(): void
     {
         $secondary = new SecondaryNode('secondary1');
@@ -130,9 +179,9 @@ final class ReplicationTest extends TestCase
     }
 
     /** @return array{Transport, MasterNode, SecondaryNode, SecondaryNode} */
-    private function cluster(): array
+    private function cluster(float $timeout = 60, float $retryBaseDelay = 0.1, float $retryMaxDelay = 1): array
     {
-        $transport  = new Transport();
+        $transport  = new Transport($timeout, $retryBaseDelay, $retryMaxDelay);
         $master     = new MasterNode($transport);
         $secondary1 = new SecondaryNode('secondary1');
         $secondary2 = new SecondaryNode('secondary2');

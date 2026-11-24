@@ -4,6 +4,8 @@ declare(strict_types=1);
 namespace Master\Replication;
 
 use Master\Logger;
+use Master\Service\RetryService;
+use Master\Worker\HealthMonitor;
 use Swoole\Coroutine;
 use Swoole\Coroutine\Http\Client;
 use Swoole\Coroutine\Channel;
@@ -14,40 +16,37 @@ class Replicator
     public function __construct(
         private readonly array $secondaries,
         private readonly Logger $logger,
-        private readonly float $timeout = 60,
+        private readonly RetryService $retryService,
+        private readonly HealthMonitor $healthMonitor,
+        private readonly float $timeout = 5,
     ) {
     }
 
     /**
-     * Sends the entry to all secondaries in parallel.
+     * Sends the entry to all secondaries in parallel, retrying each one until it ACKs.
+     * Blocks until w-1 secondaries have ACKed; delivery to the rest continues in the background.
      *
      * @return int number of ACK
      */
     public function replicate(array $entry, int $w): int
     {
         $acks = 0;
-        $tries = 0;
         $results = new Channel(count($this->secondaries()));
 
         foreach ($this->secondaries() as $host) {
             Coroutine::create(function () use ($host, $entry, $results): void {
-                try {
-                    $ok = $this->send($host, $entry);
-                } catch (\Throwable $e) {
-                    $ok = false;
-                    $this->logger->error('replication to the secondary failed unexpectedly', ['host' => $host, 'exception' => $e->getMessage()]);
-                }
-                $results->push(['host' => $host, 'ok' => $ok]);
+                $this->retryService->runWithRetry(
+                    fn () => $this->send($host, $entry),
+                    ['id' => $entry['id'], 'to' => $host],
+                    fn () => $this->healthMonitor->status($host),
+                );
+                $results->push($host);
             });
         }
 
-        while ($acks < $w - 1 && $tries < count($this->secondaries())) {
-            $result = $results->pop();
-
-            if ($result['ok']) {
-                $acks++;
-            }
-            $tries++;
+        while ($acks < $w - 1) {
+            $results->pop();
+            $acks++;
         }
 
         return $acks;

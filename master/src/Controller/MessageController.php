@@ -8,6 +8,7 @@ use Master\Http\JsonResponse;
 use Master\Logger;
 use Master\Replication\Replicator;
 use Master\Storage\MessageLog;
+use Master\Worker\HealthMonitor;
 use Swoole\Http\Request;
 
 final class MessageController
@@ -16,6 +17,7 @@ final class MessageController
         private readonly MessageLog $log,
         private readonly Replicator $replicator,
         private readonly Logger $logger,
+        private readonly HealthMonitor $healthMonitor,
     ) {
     }
 
@@ -26,6 +28,18 @@ final class MessageController
 
     public function store(Request $request): JsonResponse
     {
+        if (!$this->healthMonitor->hasQuorum()) {
+            $alive = $this->healthMonitor->aliveNodes();
+            $quorum = $this->healthMonitor->quorumSize();
+            $this->logger->warning('append rejected, no quorum', ['alive' => $alive, 'quorum' => $quorum]);
+
+            return new JsonResponse([
+                'error' => 'no quorum: master is in read-only mode, appends are not accepted',
+                'alive_nodes' => $alive,
+                'quorum' => $quorum,
+            ], 503);
+        }
+
         $body = Json::body($request);
         $writeConcern = $body['w'] ?? null;
 

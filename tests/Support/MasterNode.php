@@ -16,7 +16,7 @@ final class MasterNode
     public function __construct(Transport $transport)
     {
         $logger         = new Logger('master');
-        $this->messages = new MessageController(new MessageLog(), $transport, $logger);
+        $this->messages = new MessageController(new MessageLog(), $transport, $logger, new AlwaysHealthyMonitor());
     }
 
     public function appendMessage(string $message, int $w): JsonResponse
